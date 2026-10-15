@@ -65,10 +65,9 @@ export default function handler(req, res) {
             return false;
         };
 
-        // --- BẢNG GIÁ TRỊ VÀ VỊ TRÍ QUÂN CỜ (PIECE-SQUARE TABLES) ---
+        // --- BẢNG TRỌNG SỐ VÀ VỊ TRÍ QUÂN CỜ NÂNG CAO (PST) ---
         const pieceValues = { 'p': 100, 'n': 320, 'b': 330, 'r': 500, 'q': 900, 'k': 20000 };
 
-        // Đánh giá điểm số toàn bộ bàn cờ từ góc nhìn bên Trắng (+) hoặc Đen (-)
         const evaluateBoard = (board) => {
             let totalEvaluation = 0;
             for (let r = 0; r < 8; r++) {
@@ -76,24 +75,27 @@ export default function handler(req, res) {
                     let p = board[r][c];
                     if (p === '') continue;
                     let pLower = p.toLowerCase();
-                    let val = pieceValues[pLower] || 0;
+                    let baseVal = pieceValues[pLower] || 0;
 
-                    // Thưởng điểm kiểm soát trung tâm
-                    if ((r === 3 || r === 4) && (c === 3 || c === 4)) {
-                        val += 30;
+                    // Thưởng điểm kiểm soát ô trung tâm tuyệt đối (d4, d5, e4, e5)
+                    let centerBonus = 0;
+                    if ((r >= 3 && r <= 4) && (c >= 3 && c <= 4)) {
+                        centerBonus = 40;
+                    } else if ((r >= 2 && r <= 5) && (c >= 2 && c <= 5)) {
+                        centerBonus = 20;
                     }
 
                     if (isWhite(p)) {
-                        totalEvaluation += val + (7 - r) * 5; // Trắng thích đẩy lên trên
+                        totalEvaluation += baseVal + centerBonus + (7 - r) * 10;
                     } else {
-                        totalEvaluation -= val + r * 5;      // Đen thích đẩy xuống dưới
+                        totalEvaluation -= baseVal + centerBonus + r * 10;
                     }
                 }
             }
             return totalEvaluation;
         };
 
-        // Lấy tất cả nước đi hợp lệ của một bên
+        // Lấy tất cả nước đi và sắp xếp theo ưu tiên ăn quân (MVV-LVA) để tối ưu thuật toán cắt tỉa
         const getAllPossibleMoves = (board, isWhiteTurn) => {
             let moves = [];
             for (let r = 0; r < 8; r++) {
@@ -106,23 +108,31 @@ export default function handler(req, res) {
                     for (let tr = 0; tr < 8; tr++) {
                         for (let tc = 0; tc < 8; tc++) {
                             if (isValidMove(board, piece, r, c, tr, tc)) {
-                                moves.push({ from: { r, c }, to: { r: tr, c: tc }, piece });
+                                let target = board[tr][tc];
+                                let capturePriority = 0;
+                                // Sắp xếp nước đi ăn quân lên đầu để vét cạn nhanh hơn
+                                if (target !== '') {
+                                    capturePriority = (pieceValues[target.toLowerCase()] || 100) * 10 - (pieceValues[piece.toLowerCase()] || 100);
+                                }
+                                moves.push({ from: { r, c }, to: { r: tr, c: tc }, piece, priority: capturePriority });
                             }
                         }
                     }
                 }
             }
+            // Sắp xếp giảm dần theo ưu tiên chiến thuật
+            moves.sort((a, b) => b.priority - a.priority);
             return moves;
         };
 
-        // --- THUẬT TOÁN MINIMAX VỚI CẮT TỈA ALPHA-BETA (ĐỘ SÂU = 3 LỚP) ---
+        // --- THUẬT TOÁN MINIMAX + ALPHA-BETA PRUNING (ĐỘ SÂU 4 LỚP) ---
         const alphaBeta = (board, depth, alpha, beta, isMaximizing) => {
             if (depth === 0) {
                 return evaluateBoard(board);
             }
 
             let moves = getAllPossibleMoves(board, isMaximizing);
-            if (moves.length === 0) return isMaximizing ? -99999 : 99999;
+            if (moves.length === 0) return isMaximizing ? -999999 : 999999;
 
             if (isMaximizing) {
                 let maxEval = -Infinity;
@@ -132,9 +142,11 @@ export default function handler(req, res) {
                     clonedBoard[move.from.r][move.from.c] = '';
 
                     let evaluation = alphaBeta(clonedBoard, depth - 1, alpha, beta, false);
-                    maxEval = Math.max(maxEval, evaluation);
+                    if (evaluation > maxEval) {
+                        maxEval = evaluation;
+                    }
                     alpha = Math.max(alpha, evaluation);
-                    if (beta <= alpha) break; // Cắt tỉa Alpha-Beta
+                    if (beta <= alpha) break; // Cắt tỉa alpha-beta
                 }
                 return maxEval;
             } else {
@@ -145,15 +157,16 @@ export default function handler(req, res) {
                     clonedBoard[move.from.r][move.from.c] = '';
 
                     let evaluation = alphaBeta(clonedBoard, depth - 1, alpha, beta, true);
-                    minEval = Math.min(minEval, evaluation);
+                    if (evaluation < minEval) {
+                        minEval = evaluation;
+                    }
                     beta = Math.min(beta, evaluation);
-                    if (beta <= alpha) break; // Cắt tỉa Alpha-Beta
+                    if (beta <= alpha) break; // Cắt tỉa alpha-beta
                 }
                 return minEval;
             }
         };
 
-        // Tìm nước đi tốt nhất cho lượt hiện tại
         let isWhiteTurn = (side === 'Trắng');
         let rootMoves = getAllPossibleMoves(boardState, isWhiteTurn);
 
@@ -163,8 +176,7 @@ export default function handler(req, res) {
 
         let bestMove = null;
         let bestValue = isWhiteTurn ? -Infinity : Infinity;
-        // Độ sâu tính toán = 3 (Bot sẽ tính trước 3 nước đi của cả 2 bên)
-        let searchDepth = 3; 
+        let searchDepth = 4; // Độ sâu quét 4 lớp cực mạnh
 
         for (let move of rootMoves) {
             let clonedBoard = boardState.map(row => [...row]);
@@ -191,7 +203,7 @@ export default function handler(req, res) {
         const colNames = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'];
         let fromStr = `${colNames[bestMove.from.c]}${8 - bestMove.from.r}`;
         let toStr = `${colNames[bestMove.to.c]}${8 - bestMove.to.r}`;
-        let adviceText = `🤖 Deep AI Bot (Độ sâu 3 lớp): Khuyên đi quân [${bestMove.piece}] từ ${fromStr} sang ${toStr}.`;
+        let adviceText = `⚡ Siêu AI Engine (Depth 4): Quyết định chính xác đi quân [${bestMove.piece}] từ ${fromStr} sang ${toStr}.`;
 
         return res.status(200).json({
             success: true,
