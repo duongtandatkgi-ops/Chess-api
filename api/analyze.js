@@ -39,7 +39,7 @@ export default function handler(req, res) {
 
         const isValidMove = (board, piece, r1, c1, r2, c2) => {
             let target = board[r2][c2];
-            if (target.toUpperCase() === 'K') return false; // Không bao giờ ăn Vua trực tiếp
+            if (target.toUpperCase() === 'K') return false; 
             if (isSameTeam(piece, target)) return false;
 
             let dr = r2 - r1;
@@ -47,6 +47,11 @@ export default function handler(req, res) {
             let absDr = Math.abs(dr);
             let absDc = Math.abs(dc);
             let pUpper = piece.toUpperCase();
+
+            // Kiểm tra luật Nhập thành cho Vua
+            if (pUpper === 'K' && absDc === 2 && dr === 0) {
+                return true; // Cho phép bot tính toán nước nhập thành
+            }
 
             if (pUpper === 'P') {
                 let isW = isWhite(piece);
@@ -65,7 +70,6 @@ export default function handler(req, res) {
             return false;
         };
 
-        // --- BẢNG TRỌNG SỐ VÀ VỊ TRÍ QUÂN CỜ NÂNG CAO (PST) ---
         const pieceValues = { 'p': 100, 'n': 320, 'b': 330, 'r': 500, 'q': 900, 'k': 20000 };
 
         const evaluateBoard = (board) => {
@@ -76,26 +80,13 @@ export default function handler(req, res) {
                     if (p === '') continue;
                     let pLower = p.toLowerCase();
                     let baseVal = pieceValues[pLower] || 0;
-
-                    // Thưởng điểm kiểm soát ô trung tâm tuyệt đối (d4, d5, e4, e5)
-                    let centerBonus = 0;
-                    if ((r >= 3 && r <= 4) && (c >= 3 && c <= 4)) {
-                        centerBonus = 40;
-                    } else if ((r >= 2 && r <= 5) && (c >= 2 && c <= 5)) {
-                        centerBonus = 20;
-                    }
-
-                    if (isWhite(p)) {
-                        totalEvaluation += baseVal + centerBonus + (7 - r) * 10;
-                    } else {
-                        totalEvaluation -= baseVal + centerBonus + r * 10;
-                    }
+                    if (isWhite(p)) totalEvaluation += baseVal + (7 - r) * 5;
+                    else totalEvaluation -= baseVal + r * 5;
                 }
             }
             return totalEvaluation;
         };
 
-        // Lấy tất cả nước đi và sắp xếp theo ưu tiên ăn quân (MVV-LVA) để tối ưu thuật toán cắt tỉa
         const getAllPossibleMoves = (board, isWhiteTurn) => {
             let moves = [];
             for (let r = 0; r < 8; r++) {
@@ -108,29 +99,17 @@ export default function handler(req, res) {
                     for (let tr = 0; tr < 8; tr++) {
                         for (let tc = 0; tc < 8; tc++) {
                             if (isValidMove(board, piece, r, c, tr, tc)) {
-                                let target = board[tr][tc];
-                                let capturePriority = 0;
-                                // Sắp xếp nước đi ăn quân lên đầu để vét cạn nhanh hơn
-                                if (target !== '') {
-                                    capturePriority = (pieceValues[target.toLowerCase()] || 100) * 10 - (pieceValues[piece.toLowerCase()] || 100);
-                                }
-                                moves.push({ from: { r, c }, to: { r: tr, c: tc }, piece, priority: capturePriority });
+                                moves.push({ from: { r, c }, to: { r: tr, c: tc }, piece });
                             }
                         }
                     }
                 }
             }
-            // Sắp xếp giảm dần theo ưu tiên chiến thuật
-            moves.sort((a, b) => b.priority - a.priority);
             return moves;
         };
 
-        // --- THUẬT TOÁN MINIMAX + ALPHA-BETA PRUNING (ĐỘ SÂU 4 LỚP) ---
         const alphaBeta = (board, depth, alpha, beta, isMaximizing) => {
-            if (depth === 0) {
-                return evaluateBoard(board);
-            }
-
+            if (depth === 0) return evaluateBoard(board);
             let moves = getAllPossibleMoves(board, isMaximizing);
             if (moves.length === 0) return isMaximizing ? -999999 : 999999;
 
@@ -140,13 +119,10 @@ export default function handler(req, res) {
                     let clonedBoard = board.map(row => [...row]);
                     clonedBoard[move.to.r][move.to.c] = clonedBoard[move.from.r][move.from.c];
                     clonedBoard[move.from.r][move.from.c] = '';
-
                     let evaluation = alphaBeta(clonedBoard, depth - 1, alpha, beta, false);
-                    if (evaluation > maxEval) {
-                        maxEval = evaluation;
-                    }
+                    maxEval = Math.max(maxEval, evaluation);
                     alpha = Math.max(alpha, evaluation);
-                    if (beta <= alpha) break; // Cắt tỉa alpha-beta
+                    if (beta <= alpha) break;
                 }
                 return maxEval;
             } else {
@@ -155,13 +131,10 @@ export default function handler(req, res) {
                     let clonedBoard = board.map(row => [...row]);
                     clonedBoard[move.to.r][move.to.c] = clonedBoard[move.from.r][move.from.c];
                     clonedBoard[move.from.r][move.from.c] = '';
-
                     let evaluation = alphaBeta(clonedBoard, depth - 1, alpha, beta, true);
-                    if (evaluation < minEval) {
-                        minEval = evaluation;
-                    }
+                    minEval = Math.min(minEval, evaluation);
                     beta = Math.min(beta, evaluation);
-                    if (beta <= alpha) break; // Cắt tỉa alpha-beta
+                    if (beta <= alpha) break;
                 }
                 return minEval;
             }
@@ -169,41 +142,27 @@ export default function handler(req, res) {
 
         let isWhiteTurn = (side === 'Trắng');
         let rootMoves = getAllPossibleMoves(boardState, isWhiteTurn);
-
         if (rootMoves.length === 0) {
             return res.status(200).json({ success: false, error: 'Không tìm thấy nước đi hợp lệ hoặc đã Chiếu Hết!' });
         }
 
-        let bestMove = null;
+        let bestMove = rootMoves[0];
         let bestValue = isWhiteTurn ? -Infinity : Infinity;
-        let searchDepth = 4; // Độ sâu quét 4 lớp cực mạnh
+        let searchDepth = 3;
 
         for (let move of rootMoves) {
             let clonedBoard = boardState.map(row => [...row]);
             clonedBoard[move.to.r][move.to.c] = clonedBoard[move.from.r][move.from.c];
             clonedBoard[move.from.r][move.from.c] = '';
-
             let value = alphaBeta(clonedBoard, searchDepth - 1, -Infinity, Infinity, !isWhiteTurn);
-
-            if (isWhiteTurn) {
-                if (value > bestValue) {
-                    bestValue = value;
-                    bestMove = move;
-                }
-            } else {
-                if (value < bestValue) {
-                    bestValue = value;
-                    bestMove = move;
-                }
-            }
+            if (isWhiteTurn && value > bestValue) { bestValue = value; bestMove = move; }
+            if (!isWhiteTurn && value < bestValue) { bestValue = value; bestMove = move; }
         }
-
-        if (!bestMove) bestMove = rootMoves[0];
 
         const colNames = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'];
         let fromStr = `${colNames[bestMove.from.c]}${8 - bestMove.from.r}`;
         let toStr = `${colNames[bestMove.to.c]}${8 - bestMove.to.r}`;
-        let adviceText = `⚡ Siêu AI Engine (Depth 4): Quyết định chính xác đi quân [${bestMove.piece}] từ ${fromStr} sang ${toStr}.`;
+        let adviceText = `⚡ Siêu AI Engine: Gợi ý đi quân [${bestMove.piece}] từ ${fromStr} sang ${toStr}.`;
 
         return res.status(200).json({
             success: true,
