@@ -29,8 +29,7 @@ export default function handler(req, res) {
             let dc = Math.sign(c2 - c1);
             let r = r1 + dr;
             let c = c1 + dc;
-            while (r !== r2 || c !== r2 && (r !== r2 || c !== c2)) { // Đảm bảo quét đường đi
-                if (r === r2 && c === c2) break;
+            while (r !== r2 || c !== c2) {
                 if (board[r][c] !== '') return false;
                 r += dr;
                 c += dc;
@@ -40,8 +39,8 @@ export default function handler(req, res) {
 
         const isValidMove = (board, piece, r1, c1, r2, c2) => {
             let target = board[r2][c2];
+            if (target.toUpperCase() === 'K') return false; // Không bao giờ ăn Vua trực tiếp
             if (isSameTeam(piece, target)) return false;
-            if (target.toUpperCase() === 'K') return false; // Không bao giờ cho phép tấn công/ăn Vua trực tiếp
 
             let dr = r2 - r1;
             let dc = c2 - c1;
@@ -66,61 +65,133 @@ export default function handler(req, res) {
             return false;
         };
 
-        // Bảng giá trị cơ bản quân cờ
-        const pieceValues = { 'p': 10, 'n': 30, 'b': 30, 'r': 50, 'q': 90, 'k': 900 };
-        let allMoves = [];
-        let isTargetWhite = (side === 'Trắng');
+        // --- BẢNG GIÁ TRỊ VÀ VỊ TRÍ QUÂN CỜ (PIECE-SQUARE TABLES) ---
+        const pieceValues = { 'p': 100, 'n': 320, 'b': 330, 'r': 500, 'q': 900, 'k': 20000 };
 
-        for (let r = 0; r < 8; r++) {
-            for (let c = 0; c < 8; c++) {
-                let piece = boardState[r][c];
-                if (piece === '') continue;
-                if (isTargetWhite && !isWhite(piece)) continue;
-                if (!isTargetWhite && !isBlack(piece)) continue;
+        // Đánh giá điểm số toàn bộ bàn cờ từ góc nhìn bên Trắng (+) hoặc Đen (-)
+        const evaluateBoard = (board) => {
+            let totalEvaluation = 0;
+            for (let r = 0; r < 8; r++) {
+                for (let c = 0; c < 8; c++) {
+                    let p = board[r][c];
+                    if (p === '') continue;
+                    let pLower = p.toLowerCase();
+                    let val = pieceValues[pLower] || 0;
 
-                for (let tr = 0; tr < 8; tr++) {
-                    for (let tc = 0; tc < 8; tc++) {
-                        if (isValidMove(boardState, piece, r, c, tr, tc)) {
-                            let targetPiece = boardState[tr][tc];
-                            let score = 0;
+                    // Thưởng điểm kiểm soát trung tâm
+                    if ((r === 3 || r === 4) && (c === 3 || c === 4)) {
+                        val += 30;
+                    }
 
-                            // Ưu tiên ăn quân có giá trị cao
-                            if (targetPiece !== '') {
-                                score += (pieceValues[targetPiece.toLowerCase()] || 10) * 10;
+                    if (isWhite(p)) {
+                        totalEvaluation += val + (7 - r) * 5; // Trắng thích đẩy lên trên
+                    } else {
+                        totalEvaluation -= val + r * 5;      // Đen thích đẩy xuống dưới
+                    }
+                }
+            }
+            return totalEvaluation;
+        };
+
+        // Lấy tất cả nước đi hợp lệ của một bên
+        const getAllPossibleMoves = (board, isWhiteTurn) => {
+            let moves = [];
+            for (let r = 0; r < 8; r++) {
+                for (let c = 0; c < 8; c++) {
+                    let piece = board[r][c];
+                    if (piece === '') continue;
+                    if (isWhiteTurn && !isWhite(piece)) continue;
+                    if (!isWhiteTurn && !isBlack(piece)) continue;
+
+                    for (let tr = 0; tr < 8; tr++) {
+                        for (let tc = 0; tc < 8; tc++) {
+                            if (isValidMove(board, piece, r, c, tr, tc)) {
+                                moves.push({ from: { r, c }, to: { r: tr, c: tc }, piece });
                             }
-                            // Thưởng điểm kiểm soát trung tâm (e4, d4, e5, d5)
-                            if ((tr === 3 || tr === 4) && (tc === 3 || tc === 4)) {
-                                score += 15;
-                            }
-                            // Thưởng điểm phát triển tốt lên trên
-                            if (piece.toUpperCase() === 'P') {
-                                score += isTargetWhite ? (6 - tr) : tr;
-                            }
-
-                            allMoves.push({
-                                from: { r, c },
-                                to: { r: tr, c: tc },
-                                score: score,
-                                piece: piece
-                            });
                         }
                     }
                 }
             }
+            return moves;
+        };
+
+        // --- THUẬT TOÁN MINIMAX VỚI CẮT TỈA ALPHA-BETA (ĐỘ SÂU = 3 LỚP) ---
+        const alphaBeta = (board, depth, alpha, beta, isMaximizing) => {
+            if (depth === 0) {
+                return evaluateBoard(board);
+            }
+
+            let moves = getAllPossibleMoves(board, isMaximizing);
+            if (moves.length === 0) return isMaximizing ? -99999 : 99999;
+
+            if (isMaximizing) {
+                let maxEval = -Infinity;
+                for (let move of moves) {
+                    let clonedBoard = board.map(row => [...row]);
+                    clonedBoard[move.to.r][move.to.c] = clonedBoard[move.from.r][move.from.c];
+                    clonedBoard[move.from.r][move.from.c] = '';
+
+                    let evaluation = alphaBeta(clonedBoard, depth - 1, alpha, beta, false);
+                    maxEval = Math.max(maxEval, evaluation);
+                    alpha = Math.max(alpha, evaluation);
+                    if (beta <= alpha) break; // Cắt tỉa Alpha-Beta
+                }
+                return maxEval;
+            } else {
+                let minEval = Infinity;
+                for (let move of moves) {
+                    let clonedBoard = board.map(row => [...row]);
+                    clonedBoard[move.to.r][move.to.c] = clonedBoard[move.from.r][move.from.c];
+                    clonedBoard[move.from.r][move.from.c] = '';
+
+                    let evaluation = alphaBeta(clonedBoard, depth - 1, alpha, beta, true);
+                    minEval = Math.min(minEval, evaluation);
+                    beta = Math.min(beta, evaluation);
+                    if (beta <= alpha) break; // Cắt tỉa Alpha-Beta
+                }
+                return minEval;
+            }
+        };
+
+        // Tìm nước đi tốt nhất cho lượt hiện tại
+        let isWhiteTurn = (side === 'Trắng');
+        let rootMoves = getAllPossibleMoves(boardState, isWhiteTurn);
+
+        if (rootMoves.length === 0) {
+            return res.status(200).json({ success: false, error: 'Không tìm thấy nước đi hợp lệ hoặc đã Chiếu Hết!' });
         }
 
-        if (allMoves.length === 0) {
-            return res.status(200).json({ success: false, error: 'Không tìm thấy nước đi hợp lệ hoặc đã bị Chiếu Hết (Checkmate)!' });
+        let bestMove = null;
+        let bestValue = isWhiteTurn ? -Infinity : Infinity;
+        // Độ sâu tính toán = 3 (Bot sẽ tính trước 3 nước đi của cả 2 bên)
+        let searchDepth = 3; 
+
+        for (let move of rootMoves) {
+            let clonedBoard = boardState.map(row => [...row]);
+            clonedBoard[move.to.r][move.to.c] = clonedBoard[move.from.r][move.from.c];
+            clonedBoard[move.from.r][move.from.c] = '';
+
+            let value = alphaBeta(clonedBoard, searchDepth - 1, -Infinity, Infinity, !isWhiteTurn);
+
+            if (isWhiteTurn) {
+                if (value > bestValue) {
+                    bestValue = value;
+                    bestMove = move;
+                }
+            } else {
+                if (value < bestValue) {
+                    bestValue = value;
+                    bestMove = move;
+                }
+            }
         }
 
-        // Chọn nước đi có điểm số tối ưu nhất
-        allMoves.sort((a, b) => b.score - a.score);
-        let bestMove = allMoves[0];
+        if (!bestMove) bestMove = rootMoves[0];
 
         const colNames = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'];
         let fromStr = `${colNames[bestMove.from.c]}${8 - bestMove.from.r}`;
         let toStr = `${colNames[bestMove.to.c]}${8 - bestMove.to.r}`;
-        let adviceText = `🤖 Trí tuệ nhân tạo gợi ý: Đi quân [${bestMove.piece}] từ ${fromStr} sang ${toStr}.`;
+        let adviceText = `🤖 Deep AI Bot (Độ sâu 3 lớp): Khuyên đi quân [${bestMove.piece}] từ ${fromStr} sang ${toStr}.`;
 
         return res.status(200).json({
             success: true,
