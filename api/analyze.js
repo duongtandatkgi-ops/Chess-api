@@ -15,12 +15,11 @@ export default function handler(req, res) {
     try {
         const { boardState, side } = req.body;
 
-        let fromR = 6, fromC = 4, toR = 4, toC = 4; // Mặc định cho Trắng: e2 -> e4
+        let fromR = 6, fromC = 4, toR = 4, toC = 4; // Mặc định Trắng: e2 -> e4
         let adviceText = "Đi tốt từ e2 lên e4 để kiểm soát trung tâm.";
 
-        // Kiểm tra linh hoạt cả 'Đen' và 'Den'
         if (side === 'Đen' || side === 'Den') {
-            fromR = 1; fromC = 4; toR = 3; toC = 4; // Mặc định cho Đen: e7 -> e5
+            fromR = 1; fromC = 4; toR = 3; toC = 4; // Mặc định Đen: e7 -> e5
             adviceText = "Đi tốt từ e7 xuống e5 để đối kháng trung tâm.";
         }
 
